@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quiz PRO ONLINE</title>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+
+<style>
+body { font-family: Arial; background:#0f172a; color:#fff; }
+.container { max-width:500px; margin:auto; padding:20px; }
+button { padding:15px; margin:5px; font-size:16px; border:none; border-radius:10px; cursor:pointer; }
+#answers { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.answerBtn { background:#1e293b; }
+.correct { background:green !important; }
+.wrong { background:red !important; }
+#timerBar { height:10px; background:lime; width:100%; transition:1s linear; }
+</style>
+</head>
+<body>
+<div class="container">
+<h2>Quiz PRO 🎯</h2>
+
+<div id="menu">
+<input id="name" placeholder="Imię"><br><br>
+<button onclick="createRoom()">Stwórz pokój</button>
+<input id="roomInput" placeholder="Kod">
+<button onclick="joinRoom()">Dołącz</button>
+</div>
+
+<div id="lobby" style="display:none;">
+<h3>Kod: <span id="roomCode"></span></h3>
+<button id="startBtn" onclick="startGame()">START</button>
+<ul id="players"></ul>
+<p id="link"></p>
+</div>
+
+<div id="quiz" style="display:none;">
+<div id="timerBar"></div>
+<p id="question"></p>
+<div id="answers"></div>
+</div>
+
+<div id="end" style="display:none;">
+<h3>🏆 Podium</h3>
+<ol id="ranking"></ol>
+</div>
+</div>
+
+<script>
+const firebaseConfig = {
+ apiKey: "AIzaSyCzFgj9D_GiwMyZ57xnNuSPXOibE-v8HxY",
+ authDomain: "jastrzab-quiz.firebaseapp.com",
+ databaseURL: "https://jastrzab-quiz-default-rtdb.europe-west1.firebasedatabase.app",
+ projectId: "jastrzab-quiz",
+ storageBucket: "jastrzab-quiz.appspot.com",
+ messagingSenderId: "30565476812",
+ appId: "1:30565476812:web:c935179f5c1b1c0383d569"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+let player="";
+let room="";
+let isHost=false;
+let score=0;
+let answered=false;
+let startTime=0;
+let currentQuestionId=null;
+let used=[];
+
+// 🔥 PRAWDZIWA BAZA (fragment – możesz łatwo rozbudować JSON)
+let questions = [];
+
+fetch("questions.json")
+  .then(res => res.json())
+  .then(data => {
+    questions = data;
+  });
+
+function getQuestion(){
+ let idx;
+ do { idx=Math.floor(Math.random()*questions.length); }
+ while(used.includes(idx));
+ used.push(idx);
+ return {...questions[idx], id:idx};
+}
+
+function createRoom(){
+ player=name.value||"Gracz";
+ room=Math.random().toString(36).substring(2,7);
+ isHost=true;
+ score=0;
+ used=[];
+
+ db.ref("rooms/"+room).set({status:"lobby",timer:10});
+ db.ref("rooms/"+room+"/players/"+player).set(0);
+ showLobby();
+}
+
+function joinRoom(){
+ player=name.value||"Gracz";
+ room=roomInput.value;
+ db.ref("rooms/"+room+"/players/"+player).set(0);
+ showLobby();
+}
+
+function showLobby(){
+ menu.style.display="none";
+ lobby.style.display="block";
+ roomCode.innerText=room;
+ link.innerText=location.href+"?room="+room;
+
+ db.ref("rooms/"+room).on("value",snap=>{
+  const data=snap.val();
+  if(!data) return;
+
+  players.innerHTML="";
+  Object.keys(data.players||{}).forEach(p=>{
+   const li=document.createElement("li"); li.innerText=p; players.appendChild(li);
+  });
+
+  if(data.status==="game" && data.question.id!==currentQuestionId){
+   currentQuestionId=data.question.id;
+   answered=false;
+   startQuiz(data.question);
+  }
+
+  if(data.status==="end") showRanking(data.players);
+ });
+}
+
+function startGame(){ nextQuestion(); }
+
+function nextQuestion(){
+ const q=getQuestion();
+ db.ref("rooms/"+room).update({status:"game",question:q,timer:10});
+ startTime=Date.now();
+}
+
+function startQuiz(q){
+ lobby.style.display="none";
+ quiz.style.display="block";
+ question.innerText=q.q;
+ answers.innerHTML="";
+
+ q.a.forEach((ans,i)=>{
+  const btn=document.createElement("button");
+  btn.className="answerBtn";
+  btn.innerText=ans;
+  btn.onclick=()=>answer(i,q.c);
+  answers.appendChild(btn);
+ });
+}
+
+function answer(i,c){
+ if(answered) return;
+ answered=true;
+
+ const btns=document.querySelectorAll(".answerBtn");
+ btns.forEach((b,index)=>{
+  if(index===c) b.classList.add("correct");
+  if(index===i && i!==c) b.classList.add("wrong");
+  b.disabled=true;
+ });
+
+ if(i===c){
+  const t=(Date.now()-startTime)/1000;
+  const pts=Math.max(1,Math.floor(10-t));
+  score+=pts;
+  db.ref("rooms/"+room+"/players/"+player).set(score);
+ }
+}
+
+function showRanking(playersData){
+ quiz.style.display="none";
+ end.style.display="block";
+ const sorted=Object.entries(playersData).sort((a,b)=>b[1]-a[1]);
+ ranking.innerHTML="";
+ sorted.slice(0,3).forEach((p,i)=>{
+  const li=document.createElement("li");
+  li.innerText=`${i+1}. ${p[0]} - ${p[1]} pkt`;
+  ranking.appendChild(li);
+ });
+}
+
+setInterval(()=>{
+ if(!isHost||!room) return;
+
+ db.ref("rooms/"+room).once("value").then(snap=>{
+  const data=snap.val();
+  if(!data||data.status!=="game") return;
+
+  let t=data.timer-1;
+  if(t<=0) nextQuestion();
+  else db.ref("rooms/"+room).update({timer:t});
+
+  timerBar.style.width=(t*10)+"%";
+ });
+},1000);
+
+// AUTO JOIN
+const params=new URLSearchParams(location.search);
+if(params.get("room")) roomInput.value=params.get("room");
+</script>
+</body>
+</html>
